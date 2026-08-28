@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { fetchWithAuth } from "../lib/api";
-import { signInAnonymously } from "firebase/auth";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../lib/firebase";
+import { useRouter } from "next/navigation";
 
 type Result = {
   filename?: string;
@@ -159,11 +160,10 @@ export default function Home() {
   const [error, setError] = useState("");
   const [user, setUser] = useState<any>(null);
 
-  useEffect(() => {
-    signInAnonymously(auth).then((cred) => {
-      setUser(cred.user);
-    }).catch(console.error);
-  }, []);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isLogin, setIsLogin] = useState(true);
+  const router = useRouter();
 
   const [mouse, setMouse] = useState({
     x: 0,
@@ -179,13 +179,71 @@ export default function Home() {
         y: event.clientY,
       });
     };
-
     window.addEventListener("mousemove", handleMouseMove);
-
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
     };
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser && currentUser.email === "admin@verifyx.com") {
+        router.push("/admin");
+      }
+    });
+    return () => unsubscribe();
+  }, [router]);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (isLogin) {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        await createUserWithEmailAndPassword(auth, email, password);
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setUser(null);
+  };
+
+  if (user === null) {
+    return (
+      <div className="verifyx-page flex items-center justify-center min-h-screen">
+        <div className="mouse-glow" style={{ transform: `translate3d(${mouse.x - 220}px, ${mouse.y - 220}px, 0)` }} />
+        <div className="background-grid" />
+        
+        <div className="relative z-10 bg-white/90 backdrop-blur-xl p-10 rounded-3xl shadow-2xl border border-white/40 max-w-md w-full text-gray-900">
+          <div className="flex justify-center mb-6">
+            <div className="brand-icon w-12 h-12 flex items-center justify-center rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-600/30">
+              <ShieldIcon />
+            </div>
+          </div>
+          <h2 className="text-2xl font-black mb-2 text-center tracking-tight text-gray-900">{isLogin ? "Login to VERI-CHAIN" : "Create Account"}</h2>
+          <p className="text-center text-gray-500 text-sm font-semibold tracking-widest uppercase mb-8">Role-Based Access</p>
+          
+          <form onSubmit={handleAuth}>
+            <input type="email" placeholder="Email (use admin@verifyx.com for Admin)" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all bg-white text-gray-900 placeholder-gray-400" required />
+            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-8 p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all bg-white text-gray-900 placeholder-gray-400" required />
+            <button type="submit" className="analyze-button w-full">
+              <span className="button-shine" />
+              {isLogin ? "SECURE LOGIN" : "REGISTER ACCOUNT"}
+            </button>
+            <div className="mt-6 text-center text-sm font-bold text-gray-400 cursor-pointer hover:text-blue-600 transition-colors" onClick={() => setIsLogin(!isLogin)}>
+              {isLogin ? "New user? Create Applicant Account" : "Already registered? Login"}
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
 
   const handleFileChange = (
     event: React.ChangeEvent<HTMLInputElement>
@@ -297,11 +355,14 @@ export default function Home() {
 
             <div className="nav-divider" />
 
-            <div className="system-status">
-              <span className="status-dot">
-                <span />
-              </span>
-              SYSTEM READY
+            <div className="system-status flex items-center gap-4">
+              <div>
+                <span className="status-dot">
+                  <span />
+                </span>
+                APPLICANT PORTAL
+              </div>
+              <button onClick={handleLogout} className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors ml-4 uppercase tracking-widest">Logout</button>
             </div>
           </nav>
         </div>

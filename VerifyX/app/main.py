@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.gemini import categorize_document
-from app.database import init_db, insert_verification, get_records_by_user, get_record_by_hash
+from app.database import init_db, insert_verification, get_records_by_user, get_record_by_hash, get_all_records
 from app.auth import get_current_user
 from app.ela import compute_ela
 from app.inference import predict_fraud_score
@@ -127,8 +127,11 @@ async def analyze(
     }
 
 @app.get("/api/v1/records")
-def get_records(user: dict = Depends(get_current_user)):
-    records = get_records_by_user(user["uid"])
+def get_records(role: str = None, user: dict = Depends(get_current_user)):
+    if role == "admin":
+        records = get_all_records()
+    else:
+        records = get_records_by_user(user["uid"])
     return {"records": records}
 
 @app.get("/api/v1/verify/{query_hash}")

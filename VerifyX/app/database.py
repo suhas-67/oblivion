@@ -71,3 +71,14 @@ def get_record_by_hash(query_hash: str):
     if row:
         return dict(row)
     return None
+
+def get_all_records():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT * FROM document_verifications ORDER BY created_at DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
