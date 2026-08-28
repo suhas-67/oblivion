@@ -1,0 +1,45 @@
+# Node
+node_modules/
+.next/
+out/
+build/
+.env*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# Models
+*.pt
+*.pth
+*.onnx
+
+# Env
+.env
+doc.env
+serviceAccountKey.json
+
+# OS
+.DS_Store
+Thumbs.db
