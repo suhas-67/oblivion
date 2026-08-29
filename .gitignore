@@ -37,8 +37,15 @@ ENV/
 
 # Env
 .env
+.env.*
 doc.env
 serviceAccountKey.json
+
+# Local Databases and Uploads
+*.db
+uploads/
+VerifyX/uploads/
+VerifyX/verichain.db
 
 # OS
 .DS_Store

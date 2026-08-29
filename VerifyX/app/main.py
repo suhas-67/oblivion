@@ -1,27 +1,35 @@
 from pathlib import Path
-import tempfile
-import uuid
-import shutil
-import os
-
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 
-from app.gemini import categorize_document
-from app.database import init_db, insert_verification, get_records_by_user, get_record_by_hash, get_all_records
+from app.config import (
+    UPLOADS_DIR,
+    ALLOWED_EXTENSIONS,
+    MAX_FILE_SIZE_BYTES
+)
+from app.database import (
+    init_db,
+    get_records_by_user,
+    get_record_by_hash,
+    get_all_records
+)
 from app.auth import get_current_user
-from app.ela import compute_ela
-from app.inference import predict_fraud_score
-from app.web3_utils import get_file_hash, anchor_document_on_chain
-
-
-app = FastAPI(
-    title="VerifyX",
-    description="AI Document Categorization & Fraud Detection API",
-    version="1.0"
+from app.pipeline import DocumentVerificationPipeline
+from app.schemas import (
+    AnalyzeResponse,
+    RecordListResponse,
+    VerifyHashResponse,
+    VerificationRecord
 )
 
+app = FastAPI(
+    title="VerifyX Enterprise Document Verification API",
+    description="Multi-Factor AI & Cryptographic Document Fraud Analysis API",
+    version="2.0"
+)
+
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,121 +38,71 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
-MAX_FILE_SIZE = 15 * 1024 * 1024
+# Serve uploaded previews and ELA heatmaps securely
+app.mount("/api/v1/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 @app.on_event("startup")
 def startup_event():
+    """Initializes the database schema on application start."""
     init_db()
 
 @app.get("/")
-def root():
-    return {"application": "VerifyX", "status": "running"}
+def health_check():
+    """Health check endpoint."""
+    return {"status": "active", "service": "VerifyX", "version": "2.0"}
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.post("/api/v1/analyze")
-async def analyze(
+@app.post("/api/v1/analyze", response_model=AnalyzeResponse)
+async def analyze_document(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user)
 ):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided.")
-
-    extension = Path(file.filename).suffix.lower()
-
-    if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Unsupported file format.")
+    """
+    Main verification endpoint.
+    Performs multi-factor forensic verification, Gemini AI visual analysis, and blockchain anchoring.
+    """
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file extension '{file_ext}'. Allowed: {ALLOWED_EXTENSIONS}"
+        )
 
     file_data = await file.read()
+    if not file_data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    if len(file_data) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="Maximum file size is 15 MB.")
+    if len(file_data) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds maximum allowed size of 15MB.")
 
-    uploads_dir = Path("uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    
-    unique_id = str(uuid.uuid4())
-    original_file_path = uploads_dir / f"{unique_id}_{file.filename}"
-    original_file_path.write_bytes(file_data)
-    
-    # 1. SHA-256 Hash
-    file_sha256 = get_file_hash(file_data)
-    
-    # 2. Semantic Analysis (Gemini)
-    try:
-        gemini_result = categorize_document(original_file_path)
-    except Exception as e:
-        gemini_result = {"document_type": "unknown", "authenticity": "uncertain"}
-        print(f"Gemini analysis failed: {e}")
+    # Process document through the modular verification pipeline
+    result = DocumentVerificationPipeline.process_document(
+        file_data=file_data,
+        filename=file.filename,
+        user_uid=user["uid"]
+    )
+    return result
 
-    # 3. Error Level Analysis
-    ela_path = compute_ela(original_file_path)
-    
-    # 4. PyTorch ResNet-18 Classifier
-    fraud_score = predict_fraud_score(ela_path)
-    
-    # 5. Decision Logic
-    if fraud_score < 0.30:
-        status = "VERIFIED"
-        tx_hash = anchor_document_on_chain(file_sha256)
-    else:
-        status = "REJECTED"
-        tx_hash = None
-        
-    # 6. Database storage
-    record = {
-        "id": unique_id,
-        "user_uid": user["uid"],
-        "filename": file.filename,
-        "file_sha256": file_sha256,
-        "fraud_score": fraud_score,
-        "gemini_verdict": gemini_result.get("authenticity", "uncertain"),
-        "status": status,
-        "tx_hash": tx_hash,
-        "original_file_path": str(original_file_path),
-        "ela_file_path": ela_path
-    }
-    
-    insert_verification(record)
-    
-    return {
-        "filename": file.filename,
-        "category": gemini_result.get("document_type"),
-        "gemini_confidence": gemini_result.get("confidence", 0),
-        "gemini_reason": gemini_result.get("reason", ""),
-        "fraud_score": fraud_score,
-        "status": status,
-        "tx_hash": tx_hash,
-        "file_sha256": file_sha256,
-        "ela_heatmap_url": f"/api/v1/uploads/{Path(ela_path).name}",
-        "original_image_url": f"/api/v1/uploads/{original_file_path.name}"
-    }
-
-@app.get("/api/v1/records")
-def get_records(role: str = None, user: dict = Depends(get_current_user)):
+@app.get("/api/v1/records", response_model=RecordListResponse)
+def get_records(
+    role: str = None, 
+    user: dict = Depends(get_current_user)
+):
+    """Fetches user verification records or all records for admin."""
     if role == "admin":
         records = get_all_records()
     else:
         records = get_records_by_user(user["uid"])
-    return {"records": records}
+    
+    typed_records = [VerificationRecord(**r) for r in records]
+    return RecordListResponse(records=typed_records)
 
-@app.get("/api/v1/verify/{query_hash}")
+@app.get("/api/v1/verify/{query_hash}", response_model=VerifyHashResponse)
 def verify_hash(query_hash: str):
-    record = get_record_by_hash(query_hash)
+    """Public third-party verification portal endpoint by SHA-256 or Tx Hash."""
+    record = get_record_by_hash(query_hash.strip())
     if not record:
-        raise HTTPException(status_code=404, detail="Record not found.")
-    
-    # Exclude sensitive info if needed, but for now returning record
-    return {"record": record}
-    
-from fastapi.responses import FileResponse
-
-@app.get("/api/v1/uploads/{filename}")
-def get_upload(filename: str):
-    file_path = Path("uploads") / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found.")
-    return FileResponse(file_path)
+        raise HTTPException(
+            status_code=404, 
+            detail="Verification record not found for the provided hash."
+        )
+    return VerifyHashResponse(record=VerificationRecord(**record))

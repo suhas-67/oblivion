@@ -102,7 +102,9 @@ class DocumentAnalysis(BaseModel):
 
     authenticity_confidence: float
 
-    authenticity_reason: str
+    forensic_analysis: str
+
+    extracted_id_number: str
 
 
 # =========================================================
@@ -110,17 +112,18 @@ class DocumentAnalysis(BaseModel):
 # =========================================================
 
 PROMPT = """
-You are VerifyX, an AI-powered document identification system.
+You are VerifyX, an AI-powered document identification system and Senior Digital Document & ID Forensic Examiner.
 
-Analyze the ACTUAL uploaded document carefully.
+Analyze the provided inputs carefully:
+1. The ACTUAL uploaded document image.
+2. The Error Level Analysis (ELA) heatmap image (if provided).
+3. The Machine Learning (ML) fraud probability score (if provided).
 
 IMPORTANT:
 
 DO NOT classify the document based on its filename.
 
 The filename is irrelevant.
-
-Use the actual uploaded document.
 
 Analyze BOTH:
 
@@ -397,70 +400,39 @@ Examples:
 =========================================================
 REASON
 =========================================================
+# VISUAL AUTHENTICITY & MULTI-FACTOR FORENSIC EXAMINATION
+# =========================================================
 
-Give a short explanation based ONLY on visible evidence.
+You are an elite Senior Digital Document & ID Forensic Examiner.
+You are provided with:
+1. The original uploaded document (PDF or Image).
+2. (Optional) Error Level Analysis (ELA) heatmap image.
+3. (Optional) Automated Forensic Suite Findings (Verhoeff mathematical checksum, EXIF editing software detection, QR code validation, SRM noise residuals).
+4. (Optional) Machine Learning Fraud Score.
 
-Do not invent information.
+FORENSIC EXAMINATION PROTOCOL:
+- **Mathematical Integrity**: If the Verhoeff checksum failed on any extracted ID numbers, this is 100% mathematical proof of forgery/number modification.
+- **Metadata & EXIF Forensics**: If editing software (e.g., Photoshop, Canva, GIMP, PicsArt) is detected in metadata, highlight this tampering trace.
+- **Visual & Typography Analysis**: Inspect for mismatched font sizes, uneven weights, irregular kerning, whiteout patches, or unnatural portrait borders.
+- **ELA & SRM Consistency**: Check for localized noise spikes around text or photo frames.
 
-Mention the strongest evidence that caused the classification.
+CLASSIFICATION RULES:
+- If Verhoeff checksum fails OR editing software is detected in metadata OR clear visual text/photo tampering is observed:
+  Return "suspicious" for authenticity, and provide a clear, step-by-step forensic breakdown in forensic_analysis.
 
+- If the document is structurally consistent, typography and photos are authentic, and automated forensic checks are clean:
+  Return "appears_consistent" for authenticity, explaining why the document passes all integrity checks.
 
-=========================================================
-VISUAL AUTHENTICITY ASSESSMENT
-=========================================================
-
-Also inspect the document for visible signs of possible manipulation.
-
-This is NOT a legal or forensic authenticity determination.
-
-Look for:
-
-- inconsistent fonts
-- unusual spacing
-- mismatched formatting
-- distorted text
-- inconsistent dates
-- duplicated text
-- suspicious alignment
-- unusual image editing
-- altered-looking regions
-- inconsistent logos
-- inconsistent symbols
-- obvious visual manipulation
-- impossible or contradictory information
-
-If there are no obvious suspicious indicators:
-
-appears_consistent
-
-If there are visible suspicious indicators:
-
-suspicious
-
-If the document quality is too poor to assess:
-
-uncertain
-
-Never claim that a document is definitively genuine or fake.
-
+- If resolution is too blurry to inspect:
+  Return "uncertain".
 
 =========================================================
 FINAL INSTRUCTION
 =========================================================
 
 Return ONLY the requested structured fields.
-
-Do not return Markdown.
-
-Do not return code fences.
-
+Do not return Markdown outside JSON.
 Do not add explanations outside the structured response.
-
-Remember:
-
-The filename MUST NOT influence classification.
-
-Analyze the actual uploaded document.
 """
 
 
@@ -490,8 +462,12 @@ def get_mime_type(file_path: Path) -> str:
 # DOCUMENT CATEGORIZATION
 # =========================================================
 
-def categorize_document(file_path: Path):
-
+def categorize_document(
+    file_path: Path, 
+    ela_path: Path = None, 
+    ml_fraud_score: float = None,
+    forensic_suite: dict = None
+):
     file_path = Path(file_path)
 
     # -----------------------------------------------------
@@ -508,11 +484,9 @@ def categorize_document(file_path: Path):
     # -----------------------------------------------------
 
     with open(file_path, "rb") as file:
-
         file_data = file.read()
 
     if not file_data:
-
         raise ValueError(
             "The uploaded document is empty."
         )
@@ -529,15 +503,9 @@ def categorize_document(file_path: Path):
     print("=" * 60)
     print("VERIFYX DOCUMENT ANALYSIS")
     print("=" * 60)
-    print(
-        f"File: {file_path.name}"
-    )
-    print(
-        f"MIME type: {mime_type}"
-    )
-    print(
-        f"Size: {len(file_data)} bytes"
-    )
+    print(f"File: {file_path.name}")
+    print(f"MIME type: {mime_type}")
+    print(f"Size: {len(file_data)} bytes")
     print("=" * 60)
 
     # -----------------------------------------------------
@@ -547,29 +515,58 @@ def categorize_document(file_path: Path):
     last_error = None
 
     for model_name in MODELS_TO_TRY:
-
         try:
-
-            print(
-                f"Trying Gemini model: {model_name}"
-            )
+            print(f"Trying Gemini model: {model_name}")
 
             # -------------------------------------------------
             # SEND DOCUMENT TO GEMINI
             # -------------------------------------------------
 
+            gemini_contents = [
+                types.Part.from_bytes(
+                    data=file_data,
+                    mime_type=mime_type,
+                )
+            ]
+            
+            if ela_path and Path(ela_path).exists():
+                with open(ela_path, "rb") as ela_file:
+                    ela_data = ela_file.read()
+                gemini_contents.append(
+                    types.Part.from_bytes(
+                        data=ela_data,
+                        mime_type=get_mime_type(Path(ela_path)),
+                    )
+                )
+                
+            if ml_fraud_score is not None:
+                gemini_contents.append(
+                    f"Machine Learning Fraud Statistical Score: {ml_fraud_score * 100:.2f}%"
+                )
+
+            if forensic_suite:
+                verhoeff_info = forensic_suite.get("verhoeff", {})
+                meta_info = forensic_suite.get("metadata", {})
+                qr_info = forensic_suite.get("qr_code", {})
+                srm_info = forensic_suite.get("srm_noise", {})
+                
+                forensic_text = f"""
+AUTOMATED FORENSIC SUITE FINDINGS:
+1. Verhoeff Mathematical ID Checksum: {verhoeff_info.get('status')} - {verhoeff_info.get('message')}
+2. Metadata & EXIF Software Scanner: {meta_info.get('status')} - {meta_info.get('details')}
+3. QR Code Integrity: {qr_info.get('status')} - {qr_info.get('details')}
+4. Spatial Rich Models (SRM) Noise Residuals: {srm_info.get('status')} - Anomaly Score: {srm_info.get('anomaly_score')}
+5. Identified Red Flags: {', '.join(forensic_suite.get('red_flags', [])) if forensic_suite.get('red_flags') else 'None'}
+"""
+                gemini_contents.append(forensic_text)
+                
+            gemini_contents.append(PROMPT)
+
             response = client.models.generate_content(
 
                 model=model_name,
 
-                contents=[
-                    types.Part.from_bytes(
-                        data=file_data,
-                        mime_type=mime_type,
-                    ),
-
-                    PROMPT,
-                ],
+                contents=gemini_contents,
 
                 config=types.GenerateContentConfig(
 
@@ -775,15 +772,15 @@ def categorize_document(file_path: Path):
                 )
 
             # -------------------------------------------------
-            # DEFAULT AUTHENTICITY REASON
+            # DEFAULT FORENSIC ANALYSIS
             # -------------------------------------------------
 
             if not result.get(
-                "authenticity_reason"
+                "forensic_analysis"
             ):
 
                 result[
-                    "authenticity_reason"
+                    "forensic_analysis"
                 ] = (
                     "The document was assessed "
                     "using visible formatting "

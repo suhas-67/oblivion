@@ -11,6 +11,36 @@ type Result = {
   category?: string;
   gemini_confidence?: number;
   gemini_reason?: string;
+  forensic_analysis?: string;
+  forensic_checks?: {
+    verhoeff?: {
+      status?: string;
+      message?: string;
+      candidates?: Array<{ number: string; is_valid: boolean; details: string }>;
+      hard_fail?: boolean;
+    };
+    metadata?: {
+      status?: string;
+      detected_software?: string[];
+      details?: string;
+      hard_fail?: boolean;
+    };
+    qr_code?: {
+      status?: string;
+      has_qr?: boolean;
+      decoded?: boolean;
+      details?: string;
+    };
+    srm_noise?: {
+      status?: string;
+      anomaly_score?: number;
+      is_anomaly?: boolean;
+      details?: string;
+    };
+    red_flags?: string[];
+    hard_fail?: boolean;
+    has_anomalies?: boolean;
+  };
   fraud_score?: number;
   status?: string;
   tx_hash?: string;
@@ -350,6 +380,7 @@ export default function Home() {
           <nav className="nav-links">
             <a href="#analyze">ANALYZE</a>
             <a href="#process">PROCESS</a>
+            <a href="/verifier" style={{ color: "#155eef", fontWeight: "bold" }}>VERIFIER PORTAL</a>
 
             {result && <a href="#result">RESULT</a>}
 
@@ -632,6 +663,25 @@ export default function Home() {
                   {result.filename || file?.name}
                 </div>
 
+                {/* VERDICT & RISK PILL */}
+                <div style={{ marginTop: "24px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                  <div style={{
+                    padding: "6px 14px",
+                    borderRadius: "999px",
+                    fontSize: "11px",
+                    fontWeight: 800,
+                    letterSpacing: "0.1em",
+                    background: result.status === "VERIFIED" ? "rgba(0, 212, 168, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                    border: `1px solid ${result.status === "VERIFIED" ? "rgba(0, 212, 168, 0.4)" : "rgba(239, 68, 68, 0.4)"}`,
+                    color: result.status === "VERIFIED" ? "#00d4a8" : "#ef4444"
+                  }}>
+                    {result.status === "VERIFIED" ? "✓ VERIFIED ON POLYGON" : "⚠ FORGERY DETECTED"}
+                  </div>
+                  <div style={{ color: "rgba(255, 255, 255, 0.6)", fontSize: "12px", fontWeight: 700 }}>
+                    {((result.fraud_score ?? 0) * 100).toFixed(1)}% Fraud Probability
+                  </div>
+                </div>
+
                 <div className="confidence">
                   <div className="confidence-heading">
                     <span>AI CONFIDENCE</span>
@@ -647,17 +697,108 @@ export default function Home() {
                     />
                   </div>
                 </div>
+
+                {/* COMPARISON IMAGES */}
+                {(result.original_image_url || result.ela_heatmap_url) && (
+                  <div style={{ marginTop: "32px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                    <div>
+                      <div style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "0.14em", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>
+                        ORIGINAL DOCUMENT
+                      </div>
+                      <div style={{ background: "rgba(0,0,0,0.5)", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.1)", padding: "6px", height: "160px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <img src={`http://127.0.0.1:8000${result.original_image_url}`} alt="Original" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: "8px", objectFit: "contain" }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "0.14em", color: "rgba(239,68,68,0.7)", marginBottom: "8px" }}>
+                        ELA HEATMAP
+                      </div>
+                      <div style={{ background: "rgba(0,0,0,0.5)", borderRadius: "12px", border: "1px solid rgba(239,68,68,0.3)", padding: "6px", height: "160px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <img src={`http://127.0.0.1:8000${result.ela_heatmap_url}`} alt="ELA Map" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: "8px", objectFit: "contain" }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="reasoning">
                 <div className="result-small-label">
-                  CLASSIFICATION REASONING
+                  CLASSIFICATION REASONING & METADATA
                 </div>
 
                 <p>
-                  {result.reason ||
+                  {result.gemini_reason ||
                     "The document was classified based on its visible content and visual characteristics."}
                 </p>
+
+                {/* METADATA DIGEST */}
+                <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div>
+                    <div style={{ fontSize: "9px", fontWeight: 800, letterSpacing: "0.14em", color: "rgba(255,255,255,0.35)", marginBottom: "3px" }}>SHA-256 HASH</div>
+                    <div style={{ fontFamily: "monospace", fontSize: "11px", color: "#60a5fa", background: "rgba(59, 130, 246, 0.1)", padding: "4px 8px", borderRadius: "6px", wordBreak: "break-all", display: "inline-block" }}>
+                      {result.file_sha256 || "N/A"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "9px", fontWeight: 800, letterSpacing: "0.14em", color: "rgba(255,255,255,0.35)", marginBottom: "3px" }}>POLYGON AMOY BLOCKCHAIN TX</div>
+                    {result.tx_hash ? (
+                      <a href={`https://amoy.polygonscan.com/tx/${result.tx_hash}`} target="_blank" rel="noreferrer" style={{ fontFamily: "monospace", fontSize: "11px", color: "#00d4a8", textDecoration: "underline", background: "rgba(0, 212, 168, 0.1)", padding: "4px 8px", borderRadius: "6px", wordBreak: "break-all", display: "inline-block" }}>
+                        {result.tx_hash}
+                      </a>
+                    ) : (
+                      <div style={{ fontSize: "11px", fontWeight: 700, color: "#ef4444", background: "rgba(239, 68, 68, 0.1)", padding: "4px 8px", borderRadius: "6px", display: "inline-block" }}>
+                        REJECTED (Not Anchored)
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* FORENSIC INTEGRITY CHECKLIST */}
+                {result.forensic_checks && (
+                  <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                    <div style={{ fontSize: "9px", fontWeight: 800, letterSpacing: "0.16em", color: "rgba(255,255,255,0.4)", marginBottom: "10px" }}>
+                      MULTI-FACTOR FORENSIC CHECKLIST
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "8px", padding: "8px 10px" }}>
+                        <div style={{ fontSize: "8px", fontWeight: 800, color: "rgba(255,255,255,0.4)" }}>VERHOEFF CHECKSUM</div>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: result.forensic_checks.verhoeff?.status === "PASSED" ? "#00d4a8" : result.forensic_checks.verhoeff?.status === "FAILED" ? "#ef4444" : "rgba(255,255,255,0.5)" }}>
+                          {result.forensic_checks.verhoeff?.status === "PASSED" ? "✓ VALID" : result.forensic_checks.verhoeff?.status === "FAILED" ? "⚠ FAILED" : "N/A"}
+                        </div>
+                      </div>
+                      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "8px", padding: "8px 10px" }}>
+                        <div style={{ fontSize: "8px", fontWeight: 800, color: "rgba(255,255,255,0.4)" }}>EXIF METADATA</div>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: result.forensic_checks.metadata?.status === "CLEAN" ? "#00d4a8" : "#ef4444" }}>
+                          {result.forensic_checks.metadata?.status === "CLEAN" ? "✓ CLEAN" : "⚠ EDITED"}
+                        </div>
+                      </div>
+                      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "8px", padding: "8px 10px" }}>
+                        <div style={{ fontSize: "8px", fontWeight: 800, color: "rgba(255,255,255,0.4)" }}>QR CODE INTEGRITY</div>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: result.forensic_checks.qr_code?.status === "VALID" ? "#00d4a8" : result.forensic_checks.qr_code?.status === "CORRUPTED_OR_TAMPERED" ? "#ef4444" : "rgba(255,255,255,0.5)" }}>
+                          {result.forensic_checks.qr_code?.status === "VALID" ? "✓ DECODED" : result.forensic_checks.qr_code?.status === "CORRUPTED_OR_TAMPERED" ? "⚠ CORRUPTED" : "NO QR"}
+                        </div>
+                      </div>
+                      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "8px", padding: "8px 10px" }}>
+                        <div style={{ fontSize: "8px", fontWeight: 800, color: "rgba(255,255,255,0.4)" }}>SRM SENSOR NOISE</div>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: result.forensic_checks.srm_noise?.status === "CONSISTENT" ? "#00d4a8" : "#ef4444" }}>
+                          {result.forensic_checks.srm_noise?.status === "CONSISTENT" ? "✓ UNIFORM" : "⚠ ANOMALY"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* EXPLAINABLE AI INSIGHTS */}
+                {result.forensic_analysis && (
+                  <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                    <div style={{ fontSize: "9px", fontWeight: 800, letterSpacing: "0.16em", color: "#a78bfa", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span>✦</span> EXPLAINABLE AI INSIGHTS
+                    </div>
+                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "13px", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>
+                      {result.forensic_analysis}
+                    </div>
+                  </div>
+                )}
 
                 <div className="tags">
                   {[
